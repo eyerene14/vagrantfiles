@@ -1,0 +1,90 @@
+# SOURCE: https://gist.scm.starbucks.com/stfreed/b2544ad9cc5f1d6d96366fb782c9099e
+
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+# NOTE: for Apple ARM Silicon you need to provide the provider option to vagrant cli as
+# it does not work with the default virtualbox provider.
+# example.
+# vagrant up --provider <provider>
+
+Vagrant.configure("2") do |config|
+  config.vm.box       = "centos/7"
+  config.vm.define    "chef-centos"
+  config.vm.hostname  = "chef-centos-vtpm"
+  # Get bundle here: https://docs.starbucks.com/pages/viewpage.action?spaceKey=GCS&title=Netskope
+  # config.vm.provision "file", source: "netskope-bundle.pem", destination: "/tmp/netskope-bundle.pem"
+  # uncomment the below line if you are using encrypted data bags (ensure edb-secret.txt is in your working dir)
+  # config.vm.provision "file", source: "edb-secret.txt", destination: "/etc/cinc/edb-secret.txt"
+  config.vm.provision "shell", inline: <<-SHELL
+# install and configure vim
+yum install -y vim-enhanced
+echo -e "syntax on\nset number" > ~/.vimrc
+
+# netskopify
+#update-ca-trust enable
+#mkdir -p /etc/pki/ca-trust/source/anchors/
+#mv /tmp/netskope-bundle.pem /etc/pki/ca-trust/source/anchors/
+#update-ca-trust extract
+
+# install cinc-workstation (chef-solo)
+curl -L https://omnitruck.cinc.sh/install.sh | sudo bash -s -- -P cinc-workstation -v 22
+
+# setup chef boiler plate
+mkdir -p /etc/cinc
+mkdir -p /var/cinc/roles
+mkdir -p /var/cinc/cookbooks/greetings/attributes
+mkdir -p /var/cinc/cookbooks/greetings/recipes
+
+cat > /etc/cinc/client.rb <<-EOH
+json_attribs                "/etc/cinc/run-list.json"
+checksum_path               "/var/cinc/checksums"
+cookbook_path               "/var/cinc/cookbooks"
+data_bag_path               "/var/cinc/data_bags"
+role_path                   "/var/cinc/roles"
+environment_path            "/var/cinc/environments"
+log_level                   :info
+log_location                STDOUT
+log_location                "/var/log/cinc-client.log"
+encrypted_data_bag_secret   "/etc/cinc/edb-secret.txt"
+solo                        true
+syntax_check_cache_path
+EOH
+
+cat > /var/cinc/cookbooks/greetings/attributes/welcome.rb <<-EOH
+default["message"] = "Hello, World"
+EOH
+
+cat > /var/cinc/cookbooks/greetings/recipes/welcome.rb <<-EOH
+bash 'welcome' do
+  code <<-EOC
+  echo \#{node["message"]}
+  EOC
+end
+EOH
+
+cat > /var/cinc/roles/welcome-mat.json <<-EOH
+{
+  "name": "welcome-mat",
+  "default_attributes": {
+    "message": "Welcome to chef centos! Please begin development and testing."
+  },
+  "run_list": [
+    "recipe[greetings::welcome]"
+  ]
+}
+EOH
+
+cat > /etc/cinc/run-list.json <<-EOH
+{
+  "run_list": [
+    "role[welcome-mat]"
+  ]
+}
+EOH
+
+# execute chef boiler plate recipe
+chef-solo -c /etc/cinc/client.rb -o "role[welcome-mat]"
+SHELL
+
+end

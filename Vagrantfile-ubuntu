@@ -1,0 +1,93 @@
+# SOURCE: https://raw.scm.starbucks.com/gist/stfreed/b2544ad9cc5f1d6d96366fb782c9099e/raw/d4a767cdb10d336a226bd5e1d0fab75c58d23044/Vagrantfile?token=AAACLERGMJDS24OMPGXUDETFO5VPQ
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+# NOTE: for Apple ARM Silicon you need to provide the provider option to vagrant cli as
+# it does not work with the default virtualbox provider.
+# example.
+# vagrant up --provider <provider>
+
+Vagrant.configure("2") do |config|
+  ubuntu_version      = 18.04
+  config.vm.box       = "bento/ubuntu-#{ubuntu_version}"
+  config.vm.define    "chef-ubuntu"
+  config.vm.hostname  = "chef-ubuntu"
+  # this will copy all your self signed certs from your local machine
+  config.vm.provision "file", source: "~/.ssl/ca-certificates.pem", destination: "/tmp/ca-certificates.pem"
+  # uncomment the below line if you are using encrypted data bags (ensure edb-secret.txt is in your working dir)
+  # config.vm.provision "file", source: "edb-secret.txt", destination: "/etc/cinc/edb-secret.txt"
+  config.vm.provision "shell", inline: <<-SHELL
+# install and configure vim
+apt-get update
+apt-get -y install vim
+echo -e "syntax on\nset number" > ~/.vimrc
+
+# netskopify
+mkdir -p /etc/cinc/trusted_certs
+cp /tmp/ca-certificates.pem /etc/cinc/trusted_certs
+cp /tmp/ca-certificates.pem /etc/ssl/certs/
+export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.pem
+export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.pem
+export CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.pem
+
+# install cinc/chef
+curl -L https://omnitruck.cinc.sh/install.sh | sudo bash -s -- -P cinc-workstation -v 22
+
+# setup chef boiler plate
+mkdir -p /etc/cinc
+mkdir -p /var/cinc/roles
+mkdir -p /var/cinc/cookbooks/greetings/attributes
+mkdir -p /var/cinc/cookbooks/greetings/recipes
+
+cat > /etc/cinc/client.rb <<-EOH
+json_attribs                "/etc/cinc/run-list.json"
+checksum_path               "/var/cinc/checksums"
+cookbook_path               "/var/cinc/cookbooks"
+data_bag_path               "/var/cinc/data_bags"
+role_path                   "/var/cinc/roles"
+environment_path            "/var/cinc/environments"
+log_level                   :info
+log_location                STDOUT
+log_location                "/var/log/cinc-client.log"
+encrypted_data_bag_secret   "/etc/cinc/edb-secret.txt"
+solo                        true
+syntax_check_cache_path
+EOH
+
+cat > /var/cinc/cookbooks/greetings/attributes/welcome.rb <<-EOH
+default["message"] = "Hello, World"
+EOH
+
+cat > /var/cinc/cookbooks/greetings/recipes/welcome.rb <<-EOH
+bash 'welcome' do
+  code <<-EOC
+  echo \#{node["message"]}
+  EOC
+end
+EOH
+
+cat > /var/cinc/roles/welcome-mat.json <<-EOH
+{
+  "name": "welcome-mat",
+  "default_attributes": {
+    "message": "Welcome to chef ubuntu! Please begin development and testing."
+  },
+  "run_list": [
+    "recipe[greetings::welcome]"
+  ]
+}
+EOH
+
+cat > /etc/cinc/run-list.json <<-EOH
+{
+  "run_list": [
+    "role[welcome-mat]"
+  ]
+}
+EOH
+
+# execute chef boiler plate recipe
+chef-solo -c /etc/cinc/client.rb -o "role[welcome-mat]"
+SHELL
+
+end
